@@ -39,6 +39,11 @@ body{min-height:100vh;overscroll-behavior:none;touch-action:pan-y}
 .pc small{font-size:12px}
 .pc.ok{border-color:var(--green);background:var(--green-soft);color:var(--green-d)}
 .pc.bad{border-color:var(--red);background:var(--red-soft);color:var(--red)}
+.nolisten{display:block;margin:0 auto 6px;color:var(--blue);font-weight:700;font-size:14px;padding:6px}
+.devrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:15px}
+.devrow input,.devrow select{width:120px;padding:8px;border-radius:10px;border:1.5px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+.devrow select{width:170px}
+textarea{-webkit-user-select:text;user-select:text;resize:vertical}
 ul.notes{margin:8px 0 0;padding-left:18px;font-size:14.5px;line-height:1.5}
 .han{font-family:"PingFang SC","Hiragino Sans GB","Noto Sans SC",sans-serif}
 button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;padding:0}
@@ -494,7 +499,7 @@ const E = {
   intro: w => ({ type: "intro", w }),
   mean: w => ({ type: "mc", w, ask: "Что это значит?", show: "han", opts: shuffle([w, ...distract(w, "t")]), field: "t" }),
   hanzi: w => ({ type: "mc", w, ask: "Выберите иероглифы", show: "ru", opts: shuffle([w, ...distract(w, "h")]), field: "h" }),
-  listen: w => ({ type: "mc", w, ask: "Нажмите, что услышали", show: "audio", opts: shuffle([w, ...distract(w, "h")]), field: "h", listen: true }),
+  listen: w => !canListen() ? E.hanzi(w) : ({ type: "mc", w, ask: "Нажмите, что услышали", show: "audio", opts: shuffle([w, ...distract(w, "h")]), field: "h", listen: true }),
   tone: w => { const v = toneVariants(w.p); return v.length < 2 ? E.mean(w) : { type: "tone", w, ask: "Как это читается?", opts: shuffle([w.p, ...v.slice(0, 3)]) }; },
   match: ws => ({ type: "match", ws: ws.slice(0, 5) }),
   speak: w => ({ type: "speak", w }),
@@ -502,10 +507,10 @@ const E = {
   write: (ch, learn) => ({ type: "write", ch, learn }),
   note: (l, i) => ({ type: "note", n: D.notes[l][i] }),
   build: s => ({ type: "build", s }),
-  buildL: s => ({ type: "build", s, listen: true }),
+  buildL: s => !canListen() ? ({ type: "build", s }) : ({ type: "build", s, listen: true }),
   fill: s => ({ type: "fill", s, opts: shuffle([s.t[s.b].replace("，", ""), ...pickN(s.g, 3)]) }),
   trans: s => { const pool = SENT.filter(x => x.id !== s.id && Math.abs(x.l - s.l) <= 1); return { type: "trans", s, opts: shuffle([s, ...pickN(pool, 2)]) }; },
-  story: (l, radio) => ({ type: radio ? "radio" : "story", st: D.stories[l], l }),
+  story: (l, radio) => ({ type: radio && canListen() ? "radio" : "story", st: D.stories[l], l }),
   sq: (q) => ({ type: "sq", q }),
 };
 function wordDrill(ws, opts = {}) {
@@ -572,7 +577,23 @@ function nextEx() {
   window.scrollTo(0, 0);
 }
 function footer(html, cls) { let f = $("#foot"); if (!f) { f = document.createElement("div"); f.id = "foot"; app.appendChild(f); } f.className = "foot " + (cls || ""); f.innerHTML = `<div class="in">${html}</div>`; }
-function checkBar(enabled) { footer(`<button class="btn" id="chk" ${enabled ? "" : "disabled"} onclick="doCheck()">Проверить</button>`); }
+function isListenEx(ex) { return ex && ((ex.type === "mc" && ex.listen) || (ex.type === "build" && ex.listen) || ex.type === "radio"); }
+function canListen() { return !(S.noListenUntil > now()); }
+function noListenLink() { return isListenEx(EX) ? `<button class="nolisten" onclick="stopListening()">🔇 Не могу слушать</button>` : ""; }
+function swapListen(ex) {
+  if (!isListenEx(ex)) return ex;
+  if (ex.type === "radio") return Object.assign({}, ex, { type: "story" });
+  if (ex.type === "build") return Object.assign({}, ex, { listen: false });
+  return E.hanzi(ex.w);
+}
+function stopListening() {
+  try { speechSynthesis.cancel(); } catch (e) {}
+  S.noListenUntil = now() + 36e5; save();
+  if (SS) SS.queue = SS.queue.map(swapListen);
+  toast("🔇 Задания на слух выключены на 1 час");
+  EX = swapListen(EX); checkFn = null; R[EX.type](EX); window.scrollTo(0, 0);
+}
+function checkBar(enabled) { footer(`${noListenLink()}<button class="btn" id="chk" ${enabled ? "" : "disabled"} onclick="doCheck()">Проверить</button>`); }
 function enableCheck(on) { const b = $("#chk"); if (b) b.disabled = !on; }
 function doCheck() { if (!checkFn) return; const r = checkFn(); feedback(r.ok, r.answer, r.extra); }
 const PRAISE = ["Отлично!", "Верно!", "Супер!", "Так держать!", "太好了！", "Молодец!", "Идеально!"];
@@ -794,7 +815,8 @@ R.write = ex => {
   if (ex.learn) say(c);
   const size = $("#hw").clientWidth || 280;
   if (!window.HanziWriter || !STROKES[c]) { $("#wmsg").textContent = "Для этого знака нет данных о чертах."; cont(); return; }
-  writer = HanziWriter.create("hw", c, { width: size, height: size, padding: 14, showCharacter: false, showOutline: !!ex.learn, strokeColor: "#231e18", radicalColor: "#d23a33", outlineColor: "#e2d8ca", highlightColor: "#2f7fd0", drawingColor: "#2f7fd0", drawingWidth: 26, strokeAnimationSpeed: 1.4, delayBetweenStrokes: 120, charDataLoader: (ch, ok) => ok(STROKES[ch]) });
+  const css = getComputedStyle(document.documentElement), cv = n => css.getPropertyValue(n).trim();
+  writer = HanziWriter.create("hw", c, { width: size, height: size, padding: 14, showCharacter: false, showOutline: !!ex.learn, strokeColor: cv("--ink") || "#231e18", radicalColor: cv("--red") || "#d23a33", outlineColor: cv("--line2") || "#e2d8ca", highlightColor: "#2f7fd0", drawingColor: "#2f7fd0", drawingWidth: 26, strokeAnimationSpeed: 1.4, delayBetweenStrokes: 120, charDataLoader: (ch, ok) => ok(STROKES[ch]) });
   let miss = 0;
   const startQuiz = () => writer.quiz({
     showHintAfterMisses: ex.learn ? 1 : 3, leniency: ex.learn ? 1.4 : 1.1,
@@ -884,7 +906,7 @@ R.radio = ex => {
   };
   $("#pl").onclick = () => play(0); $("#sl").onclick = () => play(1);
   $("#tx").onclick = () => { $("#lines").innerHTML = st.lines.map((ln, i) => lineHtml(st, ln, i)).join(""); };
-  footer(`<button class="btn" onclick="try{speechSynthesis.cancel()}catch(e){};questProgress('listen',2);SS.correct++;nextEx()">К вопросам</button>`);
+  footer(`${noListenLink()}<button class="btn" onclick="try{speechSynthesis.cancel()}catch(e){};questProgress('listen',2);SS.correct++;nextEx()">К вопросам</button>`);
   play(0);
 };
 R.sq = ex => {
@@ -1070,16 +1092,53 @@ function openSettings() {
   const m = modal(`<h3 style="margin-top:0">⚙️ Настройки</h3>
    <div class="sub">Дневная цель</div><div class="seg">${[10, 20, 30, 50].map(g => `<button class="${S.goal === g ? "on" : ""}" data-g="${g}">${g} XP</button>`).join("")}</div>
    ${tg("pyHint", "Подсказки пиньинь")}${tg("sound", "Звуки ответов")}${tg("mic", "Проверка произношения микрофоном")}${tg("free", "Свободный режим (все уроки открыты)")}
+   <button class="toggle ${canListen() ? "" : "on"}" data-nl="1"><span>Без заданий на слух (1 час)</span><span class="sw"></span></button>
    <button class="toggle" data-v="1"><span>Проверить голос диктора 🔊</span><span>›</span></button>
    <button class="toggle" data-a="reset" style="color:var(--red)"><span>Сбросить весь прогресс</span><span>›</span></button>
    <p class="sub">Прогресс хранится в этом браузере на этом устройстве.</p>
+   <p class="sub ver" data-ver="1" style="text-align:center;opacity:.5">Версия 1.4</p>
    <button class="btn ghost" data-a="close">Готово</button>`, a => { if (a === "reset") resetAll(); else go(tab); });
   m.addEventListener("click", e => {
     const t = e.target.closest("[data-t]"), g = e.target.closest("[data-g]"), v = e.target.closest("[data-v]");
     if (t) { S[t.dataset.t] = !S[t.dataset.t]; t.classList.toggle("on", !!S[t.dataset.t]); save(); }
     if (g) { S.goal = +g.dataset.g; m.querySelectorAll("[data-g]").forEach(b => b.classList.toggle("on", b === g)); save(); }
     if (v) say("你好，我叫宋华。认识你很高兴。");
+    const nl = e.target.closest("[data-nl]");
+    if (nl) { S.noListenUntil = canListen() ? now() + 36e5 : 0; nl.classList.toggle("on", !canListen()); save(); }
+    if (e.target.closest("[data-ver]")) { verTaps++; if (verTaps >= 5) { verTaps = 0; m.remove(); devLogin(); } }
   });
+}
+let verTaps = 0;
+const DEV_CODE = "hanyu2026";
+function devLogin() {
+  if (S.dev) return devPanel();
+  const m = modal(`<h3 style="margin-top:0">🔐 Режим разработчика</h3><p class="sub">Введите код-пароль.</p><input class="search" id="devcode" type="password" autocomplete="off" autocapitalize="off" placeholder="Код"><button class="btn" id="devok">Войти</button><button class="btn ghost" data-a="x">Отмена</button>`);
+  const inp = m.querySelector("#devcode"); setTimeout(() => inp.focus(), 100);
+  const tryIt = () => { if (inp.value.trim() === DEV_CODE) { S.dev = true; save(); m.remove(); devPanel(); } else { inp.value = ""; toast("Неверный код"); } };
+  m.querySelector("#devok").onclick = tryIt; inp.onkeydown = e => { if (e.key === "Enter") tryIt(); };
+}
+function devPanel() {
+  const num = (k, label) => `<label class="devrow"><span>${label}</span><input type="number" inputmode="numeric" data-k="${k}" value="${S[k] || 0}"></label>`;
+  const m = modal(`<h3 style="margin-top:0">🛠 Разработчик</h3>
+   <div class="card">${num("xp", "Опыт (XP)")}${num("gems", "Алмазы 💎")}${num("freezes", "Заморозки 🧊")}${num("streak", "Ударный режим 🔥")}${num("best", "Рекорд режима")}<button class="btn" id="dv-save">Сохранить числа</button></div>
+   <div class="card"><div class="sub">Путь</div><label class="devrow"><span>Пройдено до раздела</span><select id="dv-unit">${[...Array(11).keys()].map(i => `<option value="${i}">${i} · ${TITLES[i][0]}</option>`).join("")}</select></label>
+    <button class="btn" id="dv-done">Отметить разделы 0–N пройденными</button>
+    <button class="btn ghost" id="dv-words">Отметить слова 0–N выученными</button>
+    <button class="btn ghost" id="dv-clear" style="color:var(--red)">Сбросить только путь</button></div>
+   <div class="card"><div class="sub">Резервная копия прогресса — сохраните текст, чтобы перенести прогресс на другое устройство или восстановить его.</div>
+    <textarea id="dv-json" class="search" style="height:110px;font-size:11px;font-family:monospace"></textarea>
+    <div class="grid2"><button class="btn ghost" id="dv-exp">Скопировать</button><button class="btn" id="dv-imp">Загрузить из текста</button></div></div>
+   <button class="btn ghost" id="dv-out">Выйти из режима разработчика</button>
+   <button class="btn ghost" data-a="x">Закрыть</button>`, () => go(tab));
+  const q = s => m.querySelector(s), ta = q("#dv-json");
+  ta.value = JSON.stringify(S);
+  q("#dv-save").onclick = () => { m.querySelectorAll("[data-k]").forEach(i => S[i.dataset.k] = Math.max(0, parseInt(i.value) || 0)); if (S.streak && !S.lastDay) S.lastDay = today(); S.best = Math.max(S.best, S.streak); save(); toast("Сохранено"); ta.value = JSON.stringify(S); };
+  q("#dv-done").onclick = () => { const n = +q("#dv-unit").value; ALLSTEPS.forEach(s => { if (s.l <= n) S.done[s.id] = true; }); save(); toast(`Разделы 0–${n} пройдены`); };
+  q("#dv-words").onclick = () => { const n = +q("#dv-unit").value; W.filter(w => w.l <= n).forEach(w => { if (wm(w.id).lv < 3) S.w[w.id] = { lv: 3, due: now() + 4 * 864e5, err: 0 }; }); save(); toast("Слова отмечены выученными"); };
+  q("#dv-clear").onclick = () => { S.done = {}; S.perfect = {}; save(); toast("Путь сброшен"); };
+  q("#dv-exp").onclick = async () => { ta.value = JSON.stringify(S); try { await navigator.clipboard.writeText(ta.value); toast("Скопировано"); } catch (e) { ta.select(); toast("Выделите текст и скопируйте вручную"); } };
+  q("#dv-imp").onclick = () => { try { const s = JSON.parse(ta.value); if (!s || typeof s !== "object" || !("xp" in s)) throw 0; S = Object.assign(JSON.parse(JSON.stringify(DEF)), s, { cnt: Object.assign({}, DEF.cnt, s.cnt || {}) }); save(); toast("Прогресс загружен"); m.remove(); go("path"); } catch (e) { toast("Не получилось прочитать текст"); } };
+  q("#dv-out").onclick = () => { S.dev = false; save(); m.remove(); toast("Режим разработчика выключен"); };
 }
 function buyFreeze() { if (S.freezes >= 2) return toast("Максимум 2 заморозки"); if (S.gems < 50) return toast("Не хватает алмазов 💎"); S.gems -= 50; S.freezes++; save(); toast("🧊 Заморозка куплена"); go("profile"); }
 function resetAll() { modal(`<h3 style="margin-top:0">Сбросить весь прогресс?</h3><p class="sub">Путь, слова, ударный режим и достижения обнулятся.</p><button class="btn red" data-a="y">Сбросить</button><button class="btn ghost" data-a="n">Отмена</button>`, a => { if (a === "y") { S = JSON.parse(JSON.stringify(DEF)); save(); go("path"); } }); }
